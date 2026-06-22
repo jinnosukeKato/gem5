@@ -42,7 +42,7 @@
 
 namespace NullISA
 {
-    const Addr PageShift = 12;
+    const Addr PageShift = 31;
     const Addr PageBytes = ULL(1) << PageShift;
 }
 
