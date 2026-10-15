@@ -1,0 +1,5 @@
+Import("*")
+
+SimObject("PipelinedTracePlayer.py", sim_objects=["PipelinedTracePlayer"])
+Source("pipelined_trace_player.cc")
+DebugFlag("PipelinedTracePlayer")
