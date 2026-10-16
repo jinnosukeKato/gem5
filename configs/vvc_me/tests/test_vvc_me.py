@@ -10,6 +10,7 @@ test_vvc_me.py
 """
 
 import os
+import random
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,7 @@ from me_trace import (  # noqa: E402
     IME,
     LINE_BYTES,
     NO_NEXT,
+    NO_PRED,
     RECORD,
     TraceRecord,
     build_records,
@@ -113,8 +115,9 @@ def reference_lru_misses(addrs, n_sets: int, ways: int) -> int:
     return misses
 
 
-@unittest.skipUnless(GEM5.exists(), f"gem5 binary not found: {GEM5}")
-class Gem5PlayerTest(unittest.TestCase):
+class Gem5TestBase(unittest.TestCase):
+    """gem5 を走らせる共通の手順"""
+
     def run_gem5(self, accesses=None, records=None, extra=()):
         """トレースを書いて gem5 を走らせ、(終了コード, 出力, 統計) を返す"""
         tmp = tempfile.TemporaryDirectory()
@@ -131,6 +134,10 @@ class Gem5PlayerTest(unittest.TestCase):
     def assert_ok(self, code, log):
         self.assertEqual(code, 0, log)
         self.assertIn("trace finished", log)
+
+
+@unittest.skipUnless(GEM5.exists(), f"gem5 binary not found: {GEM5}")
+class Gem5PlayerTest(Gem5TestBase):
 
     def test_counts_requests_and_slots(self):
         acc = [
@@ -199,6 +206,110 @@ class Gem5PlayerTest(unittest.TestCase):
         code, log, _ = self.run_gem5([(0, IME, 0x0)], extra=["--cache-size", "3MiB", "--assoc", "8"])
         self.assertNotEqual(code, 0)
         self.assertIn("power of two", log)
+
+
+# ---------------------------------------------------------------------------
+# 置換ポリシ (OPT / 提案手法)
+# ---------------------------------------------------------------------------
+def quantize(d: int, bits: int, mantissa: int) -> int:
+    """MeMotion::quantize と同じ"""
+    top = (1 << bits) - 1
+    v = d + 1
+    e = v.bit_length() - 1
+    code = v - 1 if e < mantissa else ((e - mantissa + 1) << mantissa) | ((v >> (e - mantissa)) & ((1 << mantissa) - 1))
+    return min(code, top - 1)
+
+
+def reference_misses(recs, n_sets, ways, policy, protect=True, quant_bits=0, mantissa=2):
+    """MeOptRP / MeMotionRP / LRU と同じ規則のセットアソシアティブ・キャッシュ (逐次)"""
+    sets = [dict() for _ in range(n_sets)]  # line -> [last_t, last_slot, val]
+    worst = (1 << quant_bits) - 1 if quant_bits else float("inf")
+    misses = 0
+    for t, r in enumerate(recs):
+        line = r.addr // LINE_BYTES
+        st = sets[line % n_sets]
+        now = r.slot
+        val = r.opt_next_acc if policy == "opt" else r.mv_pred_next_slot
+        if line not in st:
+            misses += 1
+            if len(st) >= ways:
+                def score(e):
+                    last_t, last_slot, v = e
+                    if policy == "lru":
+                        return 0
+                    if policy == "opt":
+                        return v
+                    if protect and last_slot + 1 >= now:
+                        return 0
+                    if v == NO_PRED or v < now:
+                        return worst
+                    return quantize(v - now, quant_bits, mantissa) if quant_bits else v - now
+                victim = max(st, key=lambda k: (score(st[k]), -st[k][0]))
+                del st[victim]
+        st[line] = [t, now, val]
+    return misses
+
+
+@unittest.skipUnless(GEM5.exists(), f"gem5 binary not found: {GEM5}")
+class Gem5PolicyTest(Gem5TestBase):
+    SEQ = ["--cache-size", SMALL_CACHE[0], "--assoc", str(SMALL_CACHE[1]), "--max-outstanding", "1", "1"]
+
+    def random_records(self, seed, n=600, lines=40, slots=60):
+        """少数のセットに集中したアクセス (追い出しが起きる) と、ランダムな予測スロット"""
+        rng = random.Random(seed)
+        addrs = [((i % 3) + (i // 3) * N_SETS) * LINE_BYTES for i in range(lines)]  # セット 0〜2
+        acc = sorted(((rng.randrange(slots), IME, rng.choice(addrs)) for _ in range(n)), key=lambda a: a[0])
+        recs = build_records(acc)
+        out = []
+        for r in recs:
+            pred = NO_PRED if rng.random() < 0.15 else r.slot + rng.randrange(0, 20)
+            out.append(TraceRecord(r.slot, r.stage, r.addr, r.opt_next_acc, pred, r.seq))
+        return out
+
+    def check_policy(self, recs, policy, extra=()):
+        code, log, st = self.run_gem5(records=recs, extra=[*self.SEQ, "--repl", policy, *extra])
+        self.assert_ok(code, log)
+        return st["system.refcache.demandMisses::total"]
+
+    def test_opt_matches_reference(self):
+        for seed in range(3):
+            recs = self.random_records(seed)
+            got = self.check_policy(recs, "opt")
+            self.assertEqual(got, reference_misses(recs, N_SETS, SMALL_CACHE[1], "opt"), f"seed {seed}")
+
+    def test_opt_beats_lru(self):
+        recs = self.random_records(7)
+        self.assertLessEqual(self.check_policy(recs, "opt"), self.check_policy(recs, "lru"))
+
+    def test_motion_matches_reference(self):
+        for seed in range(3):
+            recs = self.random_records(seed)
+            for extra, kw in (((), {}), (("--quant-bits", "5"), {"quant_bits": 5}), (("--no-protect",), {"protect": False})):
+                got = self.check_policy(recs, "mv", extra)
+                self.assertEqual(got, reference_misses(recs, N_SETS, SMALL_CACHE[1], "mv", **kw), f"seed {seed} {extra}")
+
+    def test_motion_evicts_expired_prediction_first(self):
+        # セット 0 に 12 ウェイ分入れる。ライン 0 だけ予測が過去 (スロット 0)、他は遠い未来。
+        # 13 本目を入れると ライン 0 が追い出され、最後に読むとミスになる (保護しない設定)
+        ways = SMALL_CACHE[1]
+        lines = [i * SAME_SET_STRIDE for i in range(ways + 1)]
+        recs = [TraceRecord(0, IME, lines[0], NO_NEXT, 0, 0)]
+        recs += [TraceRecord(0, IME, a, NO_NEXT, 1000, i + 1) for i, a in enumerate(lines[1:ways])]
+        recs += [TraceRecord(5, IME, lines[ways], NO_NEXT, 1000, ways), TraceRecord(6, IME, lines[0], NO_NEXT, 1000, ways + 1)]
+        misses = self.check_policy(recs, "mv", ["--no-protect"])
+        self.assertEqual(misses, ways + 2)  # 初回の 13 本 + 追い出されたライン 0
+        # LRU でもライン 0 (最も古い) が追い出されるので同じ。予測が遠いのが ライン 0 だけなら LRU と結果が分かれる
+        recs2 = [TraceRecord(0, IME, lines[0], NO_NEXT, 6, 0)]
+        recs2 += [TraceRecord(0, IME, a, NO_NEXT, NO_PRED, i + 1) for i, a in enumerate(lines[1:ways])]
+        recs2 += [TraceRecord(5, IME, lines[ways], NO_NEXT, 1000, ways), TraceRecord(6, IME, lines[0], NO_NEXT, 1000, ways + 1)]
+        self.assertEqual(self.check_policy(recs2, "mv", ["--no-protect"]), ways + 1)  # ライン 0 は残る
+        self.assertEqual(self.check_policy(recs2, "lru"), ways + 2)
+
+    def test_quantize_monotone_and_capped(self):
+        for bits, m in ((4, 1), (5, 2), (6, 3)):
+            codes = [quantize(d, bits, m) for d in range(5000)]
+            self.assertTrue(all(a <= b for a, b in zip(codes, codes[1:])))
+            self.assertEqual(max(codes), (1 << bits) - 2)
 
 
 if __name__ == "__main__":

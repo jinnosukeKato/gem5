@@ -9,10 +9,12 @@ PipelinedTracePlayer で動き探索の参照読み出しを再生し、参照�
     768KiB / 3MiB / 12MiB は 12 ウェイなら 1024 / 4096 / 16384 セットになる
   * DRAM は RoRaBaCoCh の 1 チャネル。トレースのアドレスはこの配置を前提に作る
   * DRAM のデータは保持しない (null = True)。タイミングと統計だけを見る
+  * 置換ポリシは --repl で選ぶ (lru / opt / mv)。詳しくは configs/vvc_me/README.md
 
 使い方 (gem5 のディレクトリで):
   build/NULL/gem5.opt configs/vvc_me/run.py --trace trace.bin
   build/NULL/gem5.opt -d m5out/s201_3MiB configs/vvc_me/run.py --trace s201.bin --cache-size 3MiB
+  build/NULL/gem5.opt configs/vvc_me/run.py --trace s201.bin --repl mv --quant-bits 5
 """
 
 import argparse
@@ -24,6 +26,8 @@ from m5.objects import (
     Cache,
     LRURP,
     MemCtrl,
+    MeMotionRP,
+    MeOptRP,
     PipelinedTracePlayer,
     Root,
     SrcClockDomain,
@@ -50,7 +54,29 @@ def parse_args():
     p.add_argument("--tgts-per-mshr", type=int, default=8)
     p.add_argument("--max-outstanding", type=int, nargs=2, default=[16, 16], metavar=("IME", "FME"))
     p.add_argument("--issue-width", type=int, nargs=2, default=[1, 1], metavar=("IME", "FME"))
+    p.add_argument(
+        "--repl",
+        choices=["lru", "opt", "mv"],
+        default="lru",
+        help="置換ポリシ: lru / opt (論理順を基準にしたセット内 Belady) / mv (提案手法: 動きから予測した次の使用スロット)",
+    )
+    p.add_argument("--quant-bits", type=int, default=0, help="mv: 距離のタグのビット数 (0 = 量子化なし)")
+    p.add_argument("--mantissa-bits", type=int, default=2, help="mv: 浮動小数点風の量子化の仮数のビット数")
+    p.add_argument("--no-protect", action="store_true", help="mv: 直前のスロットまでに触ったラインを保護しない")
     return p.parse_args()
+
+
+def make_replacement_policy(args, player):
+    if args.repl == "lru":
+        return LRURP()
+    if args.repl == "opt":
+        return MeOptRP()
+    return MeMotionRP(
+        player=player,
+        protect_recent=not args.no_protect,
+        quant_bits=args.quant_bits,
+        mantissa_bits=args.mantissa_bits,
+    )
 
 
 def check_sets(size: str, assoc: int) -> None:
@@ -91,7 +117,7 @@ def build_system(args) -> System:
         response_latency=args.response_latency,
         mshrs=args.mshrs,
         tgts_per_mshr=args.tgts_per_mshr,
-        replacement_policy=LRURP(),  # TODO: OPT / 提案手法の置換ポリシに差し替える
+        replacement_policy=make_replacement_policy(args, system.player),
     )
     system.player.port = system.refcache.cpu_side
 
