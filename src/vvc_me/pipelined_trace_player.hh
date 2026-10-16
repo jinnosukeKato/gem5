@@ -23,7 +23,7 @@
 struct TraceFormat {
     uint32_t slot; // パイプライン内での時間スロット
     uint8_t stage; // 発行されるステージ(IME or FME)
-    uint64_t addr; // 64Byte単位のアドレス
+    uint64_t addr; // 64B 境界のバイトアドレス
     uint64_t opt_next_acc; // OPTが用いる次のアクセス番号
     uint32_t mv_pred_next_slot; // 動きベクトルから予測した次の使用スロット
     uint32_t seq; // トレース内での通し番号
@@ -62,8 +62,16 @@ class MeAccessExtension : public Extension<Request, MeAccessExtension>
 class PipelinedTracePlayer : public ClockedObject
 {
   public:
-    /** トレースの stage の値 */
-    enum Stage : uint8_t { IME = 1, FME = 2, NUM_STAGES };
+    /** トレースの stage の値 (VTM のログのステージ番号と同じ) */
+    enum Stage : uint8_t { IME = 1, FME = 2 };
+    /** ステージ数。キューやパラメータの配列は IME から順に並べる */
+    static constexpr unsigned NUM_STAGES = FME - IME + 1;
+    /** ステージ番号 → 配列の添字 (IME → 0, FME → 1) */
+    static constexpr unsigned
+    stageIndex(uint8_t stage)
+    {
+        return stage - IME;
+    }
 
   private:
     /** キャッシュ側へつながるポート (要求を出す側) */

@@ -94,14 +94,13 @@ PipelinedTracePlayer::loadNextSlot()
     // 先読みしたレコードのスロットを、次に処理するスロットとする
     curSlot = lookahead.slot;
     slotStart = curTick();
-    stats.slots++;
 
     // 同じスロットのレコードを全部キューに積む
     TraceFormat rec = lookahead;
     while (true) {
-        fatal_if(rec.stage >= NUM_STAGES, "unknown stage %d (seq %d)",
-                 rec.stage, rec.seq);
-        queues[rec.stage].push_back(rec);
+        fatal_if(rec.stage < IME || rec.stage > FME,
+                 "unknown stage %d (seq %d)", rec.stage, rec.seq);
+        queues[stageIndex(rec.stage)].push_back(rec);
 
         if (!readRecord(rec)) {
             haveLookahead = false;
@@ -116,7 +115,8 @@ PipelinedTracePlayer::loadNextSlot()
     }
 
     DPRINTF(PipelinedTracePlayer, "slot %d: IME %d reqs, FME %d reqs\n",
-            curSlot, queues[IME].size(), queues[FME].size());
+            curSlot, queues[stageIndex(IME)].size(),
+            queues[stageIndex(FME)].size());
     return true;
 }
 
@@ -126,8 +126,7 @@ PipelinedTracePlayer::loadNextSlot()
 PacketPtr
 PipelinedTracePlayer::makePacket(const TraceFormat &rec)
 {
-    // TODO: トレースの addr が「バイトアドレス」か「64B 単位の番号」かに合わせる。
-    //       ここではバイトアドレス (64B 境界) として扱っている
+    // トレースの addr は 64B 境界のバイトアドレス
     const Addr addr = rec.addr;
 
     RequestPtr req = std::make_shared<Request>(addr, BLOCK_SIZE, 0,
@@ -195,12 +194,16 @@ PipelinedTracePlayer::handleResponse(PacketPtr pkt)
 {
     auto *state = safe_cast<PlayerSenderState *>(pkt->popSenderState());
     stats.readLatency.sample(curTick() - state->issued);
-    assert(outstanding[state->stage] > 0);
-    outstanding[state->stage]--;
+    const unsigned s = stageIndex(state->stage);
+    assert(outstanding[s] > 0);
+    outstanding[s]--;
     delete state;
     delete pkt; // Request は shared_ptr なので自動で解放される
 
     if (slotFinished()) {
+        // 統計はシミュレーション開始時 (startup の後) にリセットされるので、
+        // スロットは読み込んだときではなく 終わったときに数える
+        stats.slots++;
         stats.slotCycles.sample(ticksToCycles(curTick() - slotStart));
         if (loadNextSlot()) {
             scheduleTick();
@@ -282,8 +285,8 @@ PipelinedTracePlayer::PlayerStats::PlayerStats(statistics::Group *parent)
                "Ticks from request to response")
 {
     requests.init(NUM_STAGES);
-    requests.subname(IME, "IME");
-    requests.subname(FME, "FME");
+    requests.subname(stageIndex(IME), "IME");
+    requests.subname(stageIndex(FME), "FME");
     slotCycles.init(32); // バケット数
     readLatency.init(32);
 }
