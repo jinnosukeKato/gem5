@@ -1,5 +1,7 @@
 Import("*")
 
 SimObject("PipelinedTracePlayer.py", sim_objects=["PipelinedTracePlayer"])
+SimObject("MeReplacementPolicies.py", sim_objects=["MeOptRP", "MeMotionRP"])
 Source("pipelined_trace_player.cc")
+Source("me_replacement_policies.cc")
 DebugFlag("PipelinedTracePlayer")
