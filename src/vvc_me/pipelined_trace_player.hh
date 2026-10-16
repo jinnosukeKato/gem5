@@ -8,7 +8,6 @@
 #include <string>
 #include <vector>
 
-#include "base/extensible.hh"
 #include "base/statistics.hh"
 #include "mem/packet.hh"
 #include "mem/port.hh"
@@ -16,40 +15,10 @@
 #include "params/PipelinedTracePlayer.hh"
 #include "sim/clocked_object.hh"
 #include "sim/eventq.hh"
-
-/*
-    読み込むトレースのフォーマット
-*/
-struct TraceFormat {
-    uint32_t slot; // パイプライン内での時間スロット
-    uint8_t stage; // 発行されるステージ(IME or FME)
-    uint64_t addr; // 64B 境界のバイトアドレス
-    uint64_t opt_next_acc; // OPTが用いる次のアクセス番号
-    uint32_t mv_pred_next_slot; // 動きベクトルから予測した次の使用スロット
-    uint32_t seq; // トレース内での通し番号
-};
+#include "vvc_me/me_access_ext.hh"
 
 namespace gem5
 {
-
-/**
- * 要求 (Request) に付ける拡張。トレースの 1 レコードをそのまま持たせ、
- * キャッシュの置換ポリシ (reset / touch で受け取るパケット) から読めるようにする。
- * 置換ポリシからも使うので、いずれ別ヘッダ (me_access_ext.hh など) に分けるとよい。
- */
-class MeAccessExtension : public Extension<Request, MeAccessExtension>
-{
-  public:
-    explicit MeAccessExtension(const TraceFormat &rec) : record(rec) {}
-
-    std::unique_ptr<ExtensionBase>
-    clone() const override
-    {
-        return std::make_unique<MeAccessExtension>(*this);
-    }
-
-    const TraceFormat record;
-};
 
 /**
  * パイプライン化された動き探索 (IME / FME) の参照読み出しを再生する。
@@ -150,6 +119,12 @@ class PipelinedTracePlayer : public ClockedObject
     Port &getPort(const std::string &if_name,
                   PortID idx = InvalidPortID) override;
     void startup() override;
+
+    /**
+     * いま処理しているパイプラインのスロット。
+     * 置換ポリシ (MeMotionRP) が「現在の時刻」として使う (getVictim には時刻が渡されないため)
+     */
+    uint32_t currentSlot() const { return curSlot; }
 };
 
 } // namespace gem5
