@@ -18,7 +18,6 @@ VTM のログ ──(address_trace.py)──▶ <seq>_gem5.bin ──▶ Pipelin
 | `configs/vvc_me/run.py` | 組み立てスクリプト |
 | `configs/vvc_me/me_trace.py` | トレースの読み書き (標準ライブラリだけ) |
 | `configs/vvc_me/summarize.py` | 結果を置換ポリシごとの比較表にする |
-| `configs/vvc_me/plot.py` | summary.csv から比較グラフ群 (PNG) を描画する |
 | `configs/vvc_me/tests/test_vvc_me.py` | テスト |
 | (親リポジトリ) `MemoryAccessHeatmapGenerator/address_trace.py` | VTM のログ → gem5 用トレース |
 | (親リポジトリ) `MemoryAccessHeatmapGenerator/gem5_reference.py` | gem5 のミス数を Python で再現する参照実装 (照合用) |
@@ -71,11 +70,8 @@ build/NULL/gem5.opt -d m5out/s201_3MiB_opt configs/vvc_me/run.py --trace ../buil
 build/NULL/gem5.opt -d m5out/s201_3MiB_mv  configs/vvc_me/run.py --trace ../build/s201_gem5.bin --cache-size 3MiB --repl mv
 build/NULL/gem5.opt -d m5out/s201_3MiB_mv5 configs/vvc_me/run.py --trace ../build/s201_gem5.bin --cache-size 3MiB --repl mv --quant-bits 5
 
-# 集計表とグラフを一度に出す場合
-python3 configs/vvc_me/summarize.py m5out -o m5out/summary.csv --plot-dir m5out/plots
-
-# CSV からグラフだけ単体で再描画する場合 (疎結合)
-uv run configs/vvc_me/plot.py m5out/summary.csv -o m5out/plots
+# グラフは親リポジトリの scripts/plot_gem5_summary.py で summary.csv から描く
+#   uv run ../scripts/plot_gem5_summary.py m5out/summary.csv -o m5out/plots
 ```
 
 `summarize.py` はディレクトリ名 `<seq>_<容量>_<ポリシ>` を前提に、同じ `<seq>_<容量>` の `lru` / `opt` と比べる。

@@ -106,7 +106,6 @@ def main():
     p.add_argument("-o", "--output", help="CSV の出力先")
     p.add_argument("--raw-only", action="store_true", help="生の値の表のみ表示")
     p.add_argument("--cmp-only", action="store_true", help="比較表のみ表示")
-    p.add_argument("--plot-dir", help="グラフの出力先ディレクトリ (指定時のみグラフを描画)")
     a = p.parse_args()
     rows = add_ratios(collect(a.root))
     if not rows:
@@ -151,24 +150,12 @@ def main():
                 f"{fmt_float(r['time_ratio_vs_lru'], 8, prec=3)}"
             )
 
-    csv_path = a.output
-    if not csv_path and a.plot_dir:
-        csv_path = os.path.join(a.root, "summary.csv")
-
-    if csv_path:
-        with open(csv_path, "w", newline="") as f:
+    if a.output:
+        with open(a.output, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
             w.writeheader()
             w.writerows(rows)
-        print(f"\nsaved {csv_path}")
-
-    if a.plot_dir:
-        import subprocess
-
-        plot_script = os.path.join(os.path.dirname(__file__), "plot.py")
-        cmd = ["uv", "run", "--with", "matplotlib", "python3", plot_script, csv_path, "-o", a.plot_dir]
-        print(f"\n[Plotting] running: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True)
+        print(f"\nsaved {a.output}")
 
 
 if __name__ == "__main__":
