@@ -35,7 +35,7 @@ scons build/NULL/gem5.opt -j 8      # CPU のモデルは使わないので NULL
 
 ```bash
 # 6 本まとめて (エンコード済みなら)
-./scripts/run_all_s2xx_pipeline.sh --skip-encode --skip-heatmap -j 6
+./scripts/zoo-script/run_pipeline.sh --skip-encode --skip-heatmap   # CAL なら scripts/cal-script/run_pipeline.sh -j 6
 # 1 本だけ
 uv run --project MemoryAccessHeatmapGenerator python MemoryAccessHeatmapGenerator/address_trace.py \
     build/s201.bin --mv-log build/s201_mv.bin -o build/s201_gem5.bin
